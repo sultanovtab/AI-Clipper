@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#101512">
+  <title>AI Clipper | Media Inspection</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="AI Clipper home">
+        <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M10 5H5v22h5M22 5h5v22h-5M13 11l8 5-8 5z"/></svg></span>
+        <span>AI Clipper<span class="brand-caption">LOCAL MEDIA WORKSPACE</span></span>
+      </a>
+      <div class="header-meta"><span class="phase-tag">PHASE 01</span><span class="header-divider"></span><span>Media inspection</span></div>
+    </header>
+
+    <main>
+      <section class="intro" aria-labelledby="page-title">
+        <div><p class="eyebrow"><span class="accent-line"></span> KNOW YOUR SOURCE</p><h1 id="page-title">A closer look.<br class="mobile-break"> Nothing changed.</h1><p class="intro-description">Inspect your media, right where it is. Start with a local video or a supported URL.</p></div>
+        <div class="readonly-note"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 8 3v6c0 4-5 7-8 9-3-2-8-5-8-9V6z"/><path d="m8 12 3 3 5-6"/></svg><span>Read-only by design<small>Your original stays original.</small></span></div>
+      </section>
+
+      <div id="error-message" class="error-message" role="alert" hidden></div>
+
+      <div class="workspace">
+        <section class="source-column" aria-labelledby="source-heading">
+          <div class="section-heading"><h2 id="source-heading">Choose a source</h2><span class="section-index">01 / INPUT</span></div>
+          <article class="source-card local-card">
+            <div class="card-topline"><span class="source-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7V5h7l2 2h9v13H3z"/><path d="m10 11 5 3-5 3z"/></svg></span><span class="small-tag">ON YOUR DEVICE</span></div>
+            <h3>Local video</h3>
+            <p>Open a video from any drive.<br>No upload. No copy. No size detour.</p>
+            <button id="local-select" class="button button-primary" type="button" data-action disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>Select Local Video</span><span class="button-arrow" aria-hidden="true">&nearr;</span></button>
+            <p class="card-footnote"><span class="tiny-dot"></span> Opens the native Windows file picker</p>
+          </article>
+
+          <article class="source-card url-card">
+            <div class="card-topline"><span class="source-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 14 4-4M8 16l-1 1a4 4 0 0 1-6-6l5-5a4 4 0 0 1 6 0M16 8l1-1a4 4 0 0 1 6 6l-5 5a4 4 0 0 1-6 0" transform="translate(2 0) scale(.85 1)"/></svg></span><span class="small-tag">FROM THE WEB</span></div>
+            <h3>Paste a URL</h3>
+            <p>The details, without the download.</p>
+            <form id="url-form" novalidate>
+              <label for="source-url">Video URL</label>
+              <input id="source-url" name="url" type="url" placeholder="https://www.youtube.com/watch?..." autocomplete="off" spellcheck="false" aria-describedby="url-hint" required>
+              <button id="url-inspect" class="button button-secondary" type="submit" data-action disabled><span>Inspect URL</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg></button>
+            </form>
+            <p id="url-hint" class="card-footnote">YouTube <span aria-hidden="true">/</span> Twitch <span aria-hidden="true">/</span> TikTok</p>
+            <p class="privacy-note">Metadata only. No full video download.</p>
+          </article>
+        </section>
+
+        <section class="inspection-column" aria-labelledby="inspection-heading">
+          <div class="section-heading"><h2 id="inspection-heading">Media overview</h2><span class="section-index">02 / DETAILS</span></div>
+          <div id="media-panel" class="media-panel" aria-busy="false">
+            <div class="panel-toolbar"><span class="toolbar-label"><span id="media-dot" class="state-dot"></span><span id="media-state">No source selected</span></span><span class="panel-caption">SOURCE INSPECTOR</span></div>
+            <div id="empty-state" class="empty-state">
+              <div class="empty-visual" aria-hidden="true"><div class="frame-corner corner-tl"></div><div class="frame-corner corner-tr"></div><div class="frame-corner corner-bl"></div><div class="frame-corner corner-br"></div><div class="film-frame"><span class="film-perforations"></span><svg viewBox="0 0 64 64"><rect x="9" y="15" width="46" height="34" rx="4"/><path d="m27 24 13 8-13 8z"/></svg><span class="film-perforations"></span></div><span class="visual-coordinate">SOURCE / --:--:--</span></div>
+              <p class="eyebrow">READY WHEN YOU ARE</p><h3>Your media, at a glance.</h3><p>Select a local video or inspect a URL to see<br class="desktop-break"> its duration, resolution, codecs, and source details.</p>
+              <div class="empty-fields" aria-hidden="true"><span>DURATION <b>--:--:--</b></span><span>RESOLUTION <b>-- &times; --</b></span><span>FORMAT <b>---</b></span></div>
+            </div>
+            <div id="media-content" class="media-content" hidden></div>
+            <div class="activity-bar"><span id="activity-indicator" class="activity-indicator" aria-hidden="true"></span><p id="activity-status" role="status" aria-live="polite" aria-atomic="true">Connecting to your local workspace...</p></div>
+          </div>
+        </section>
+      </div>
+
+      <section class="system-section" aria-labelledby="system-heading">
+        <div class="section-heading"><div class="system-title"><h2 id="system-heading">System status</h2><span id="system-summary" class="system-summary">Checking local tools</span></div><button id="refresh-status" class="text-button" type="button" data-action disabled>Refresh status <span aria-hidden="true">&circlearrowright;</span></button></div>
+        <div class="tool-grid">
+          <div class="tool-item"><span class="tool-symbol" aria-hidden="true">Py</span><div class="tool-info"><h3>Python</h3><p id="python-version" class="tool-version">Checking...</p></div><span id="python-status" class="tool-status">Checking</span></div>
+          <div class="tool-item"><span class="tool-symbol" aria-hidden="true">Ff</span><div class="tool-info"><h3>FFmpeg</h3><p id="ffmpeg-version" class="tool-version">Checking...</p></div><span id="ffmpeg-status" class="tool-status">Checking</span></div>
+          <div class="tool-item"><span class="tool-symbol" aria-hidden="true">Fp</span><div class="tool-info"><h3>ffprobe</h3><p id="ffprobe-version" class="tool-version">Checking...</p></div><span id="ffprobe-status" class="tool-status">Checking</span></div>
+          <div class="tool-item"><span class="tool-symbol" aria-hidden="true">Yt</span><div class="tool-info"><h3>yt-dlp</h3><p id="yt_dlp-version" class="tool-version">Checking...</p></div><span id="yt_dlp-status" class="tool-status">Checking</span></div>
+        </div>
+      </section>
+    </main>
+    <footer><span>LOCAL FIRST. SOURCE INTACT.</span><p>Phase 1 <span aria-hidden="true">/</span> Media inspection only</p></footer>
+    <noscript><p class="error-message">JavaScript is required to connect to the local inspection service. No files are uploaded through this page.</p></noscript>
+  </div>
+</body>
+</html>
