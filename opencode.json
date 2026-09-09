@@ -15,6 +15,13 @@
             "context": 1050000,
             "output": 128000
           }
+        },
+        "gpt-6-astra-pro": {
+          "name": "GPT-6 Astra Pro",
+          "limit": {
+            "context": 1050000,
+            "output": 128000
+          }
         }
       }
     }
