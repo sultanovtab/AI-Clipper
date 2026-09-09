@@ -10,3 +10,4 @@ analysis/
 
 models/
 tools/whisper/
+test-input/
