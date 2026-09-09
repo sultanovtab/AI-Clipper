@@ -125,6 +125,43 @@ dd { margin: 0; overflow-wrap: anywhere; }
 .metadata-list dd { font-size: 12px; color: #d5ddd4; white-space: pre-wrap; }
 .metadata-list .mono { font-family: "Consolas", monospace; font-size: 11px; }
 .system-section { margin-top: 31px; }
+.transcribe-section { margin-top: 31px; }
+.transcribe-card { border: 1px solid var(--border); border-radius: 12px; background: var(--panel); padding: 22px; }
+.transcribe-controls { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-end; }
+.option-group { display: flex; flex-direction: column; gap: 7px; }
+.option-group label { margin: 0; }
+select { height: 42px; background: #101612; color: var(--text); border: 1px solid #344039; border-radius: 6px; padding: 0 11px; font-size: 11px; min-width: 150px; }
+select:hover, select:focus { border-color: var(--teal); }
+.transcribe-actions { display: flex; gap: 10px; margin-left: auto; flex-wrap: wrap; }
+.transcribe-actions .button { width: auto; min-height: 42px; padding: 0 22px; margin-top: 0; }
+.button-ghost { background: #1c2621; border-color: #3a5043; color: #d6e8de; }
+.button-ghost:hover:not(:disabled) { background: #24322b; border-color: var(--teal); }
+.button-danger { background: #3a2622; border-color: #6e3c34; color: #ffc3ba; }
+.button-danger:hover:not(:disabled) { background: #4a2f29; }
+.transcribe-progress { margin-top: 22px; border-top: 1px solid var(--border); padding-top: 18px; }
+.transcribe-status { font-size: 12px; color: var(--muted); margin-bottom: 13px; }
+.progress-track { height: 8px; background: #223028; border: 1px solid #33463a; border-radius: 5px; overflow: hidden; }
+.progress-fill { height: 100%; width: 0; background: linear-gradient(90deg, var(--teal), var(--lime)); transition: width .35s ease; }
+.transcribe-stats { margin: 16px 0 0; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+.transcribe-stats > div { background: #1b241d; padding: 12px; min-width: 0; }
+.transcribe-stats dt { font-size: 9px; text-transform: uppercase; font: 8px "Consolas", monospace; letter-spacing: .6px; }
+.transcribe-stats dd { margin: 6px 0 0; font: 13px "Consolas", monospace; color: var(--lime); }
+.transcript-panel { margin-top: 22px; border-top: 1px solid var(--border); padding-top: 18px; }
+.transcript-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 15px; margin-bottom: 10px; }
+.transcript-title { font: 9px "Consolas", monospace; letter-spacing: 1.2px; color: var(--subtle); }
+.search-box { flex: 1; max-width: 280px; }
+.search-box input { height: 36px; }
+.transcript-count { color: var(--subtle); font-size: 10px; margin-bottom: 12px; }
+.transcript-list { list-style: none; margin: 0; padding: 0; max-height: 460px; overflow: auto; border: 1px solid var(--border); border-radius: 7px; background: #131a16; }
+.transcript-item { padding: 13px 16px; border-bottom: 1px solid #26302a; }
+.transcript-item:last-child { border-bottom: 0; }
+.transcript-time { font: 11px "Consolas", monospace; color: var(--teal); margin-bottom: 4px; }
+.transcript-text { font-size: 13px; line-height: 1.6; color: #d5ddd4; white-space: pre-wrap; }
+@media (max-width: 900px) {
+  .transcribe-controls { flex-direction: column; align-items: stretch; }
+  .transcribe-actions { margin-left: 0; }
+  .transcribe-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
 .system-title { display: flex; gap: 12px; align-items: center; }
 .system-summary { font-size: 10px; color: var(--subtle); }
 .text-button { color: var(--muted); font-size: 10px; background: none; border: 0; padding: 6px 0 6px 8px; }

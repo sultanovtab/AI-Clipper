@@ -1,5 +1,6 @@
-"""Phase 1: local, read-only media inspection. No media serving or downloading."""
+"""Phase 1+2: local, read-only media inspection and local CPU transcription."""
 
+import hashlib
 import json
 import math
 import os
@@ -9,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
@@ -27,6 +29,417 @@ selected_paths: set[str] = set()
 selection_lock = threading.Lock()
 picker_lock = threading.Lock()
 app = FastAPI(title="AI Clipper", docs_url=None, redoc_url=None, openapi_url=None)
+
+# --- Local transcription (Phase 2) -------------------------------------------
+WHISPER_EXE = ROOT / "tools" / "whisper" / "whisper-cli.exe"
+WHISPER_MODELS = ROOT / "models" / "whisper"
+WHISPER_DEFAULT_MODEL = WHISPER_MODELS / "ggml-base.bin"
+ANALYSIS_DIR = ROOT / "analysis"
+TEMP_DIR = ROOT / "temp"
+CHUNK_SECONDS = 20 * 60  # 20-minute chunks
+THREADS = 8
+BACKEND = "CPU"
+LANG_CODES = {"auto": "auto", "ru": "ru", "en": "en", "de": "de"}
+
+_transcribe_lock = threading.Lock()
+_active_job: "TranscribeJob | None" = None
+# Keep finished job (success/fail/cancel) so the UI can read its state.
+_last_job: "TranscribeJob | None" = None
+
+
+def _now_iso():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _fingerprint(path: Path) -> str:
+    stat = path.stat()
+    raw = f"{str(path)}\0{stat.st_size}\0{int(stat.st_mtime * 1000)}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _safe_name(value: str) -> str:
+    """Filesystem-safe key fragment from a model or language name."""
+    cleaned = "".join(c for c in value if c.isalnum() or c in "._-")
+    return cleaned or "base"
+
+
+def _analysis_file(path: Path, model: Path = WHISPER_DEFAULT_MODEL,
+                 language: str = "auto") -> Path:
+    """A transcript cache is specific to source + model + language.
+
+    Changing the Whisper model or language selects a different cache file, so a
+    resumed job never reuses segments produced by an incompatible transcription.
+    """
+    digest = _fingerprint(path)[:12]
+    model_key = _safe_name(model.name if isinstance(model, Path) else str(model))
+    lang_key = _safe_name(language or "auto")
+    return ANALYSIS_DIR / f"transcript-{digest}-{model_key}-{lang_key}.json"
+
+
+class TranscribeJob:
+    def __init__(self, path: Path):
+        self.path = path
+        self.cancel = threading.Event()
+        self.running = False
+        self.failed = False
+        self.error = None
+        self.cancelled = False
+        self.total_chunks = 0
+        self.completed_chunks = 0
+        self.current_chunk = 0       # 1-based chunk index being worked on
+        self.processed_duration = 0.0
+        self.language = "auto"
+        self.model = WHISPER_DEFAULT_MODEL.name
+        self.segments: list[dict] = []
+        self.duration = 0.0
+        self.started_at = None
+        self._lock = threading.Lock()
+
+
+def _load_saved(file: Path):
+    """Return a dict of saved transcript data, or None if absent/corrupt/or wrong shape."""
+    try:
+        with open(file, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("segments"), list):
+        return None
+    return data
+
+
+def _run_raw(args, timeout=900):
+    return subprocess.run(
+        args, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=timeout, creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+    )
+
+
+def _short_error(text: str, limit: int = 200) -> str:
+    """Return a short, single-line tool error message for the UI."""
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    if not lines:
+        return "no error output"
+    return lines[-1][:limit]
+
+
+def _transcribe_chunk(wav: Path, out_base: Path, language: str, model: Path):
+    args = [str(WHISPER_EXE), "-m", str(model), "-f", str(wav),
+            "-l", language, "-t", str(THREADS), "-oj", "-of", str(out_base), "-np"]
+    result = _run_raw(args)
+    if result.returncode:
+        raise RuntimeError(
+            f"whisper-cli failed (exit {result.returncode}): "
+            f"{_short_error(result.stderr)}"
+        )
+    json_path = Path(f"{out_base}.json")
+    try:
+        with open(json_path, "r", encoding="utf-8-sig") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("whisper-cli returned no readable JSON.") from exc
+    return data
+
+
+def _run_worker(job: TranscribeJob, language: str, model: Path, retranscribe: bool):
+    try:
+        file = _analysis_file(job.path, model, language)
+        job.duration = 0.0
+
+        # Total duration from the source itself.
+        probe = _run_raw([
+            shutil.which("ffprobe") or "ffprobe", "-v", "error",
+            "-protocol_whitelist", "file", "-show_entries", "format=duration",
+            "-of", "json", str(job.path),
+        ])
+        if probe.returncode:
+            raise RuntimeError("Could not read the video duration.")
+        probe_data = json.loads(probe.stdout)
+        duration = number((probe_data.get("format") or {}).get("duration"))
+        if duration is None or duration <= 0:
+            raise RuntimeError("This video reports no playable duration.")
+        job.duration = duration
+
+        total = int(math.ceil(duration / CHUNK_SECONDS))
+        if total < 1:
+            total = 1
+        job.total_chunks = total
+
+        fingerprint = _fingerprint(job.path)
+
+        if retranscribe:
+            done = 0
+            segments: list[dict] = []
+        else:
+            saved = _load_saved(file)
+            if saved and saved.get("fingerprint") == fingerprint:
+                done = int(saved.get("completed_chunks") or 0)
+                segments = list(saved.get("segments") or [])
+            else:
+                done = 0
+                segments = []
+            done = min(done, total)
+            if done >= total:
+                job.segments = segments
+                job.completed_chunks = total
+                job.processed_duration = duration
+                return
+
+        job.segments = segments
+        job.completed_chunks = done
+        job.processed_duration = min(done * CHUNK_SECONDS, duration)
+        job.language = language
+        job.model = model.name
+
+        TEMP_DIR.mkdir(parents=True, exist_ok=True)
+        ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
+
+        for idx in range(done, total):
+            if job.cancel.is_set():
+                job.cancelled = True
+                return
+            job.current_chunk = idx + 1
+            start = idx * CHUNK_SECONDS
+            end = min(start + CHUNK_SECONDS, duration)
+            safe_id = fingerprint[:12]
+            wav = TEMP_DIR / f"transcribe-{safe_id}-chunk-{idx:04d}.wav"
+            out_base = TEMP_DIR / f"transcribe-{safe_id}-chunk-{idx:04d}"
+            json_path = Path(f"{out_base}.json")
+            try:
+                extract = _run_raw([
+                    shutil.which("ffmpeg") or "ffmpeg", "-nostdin", "-y", "-v", "error",
+                    "-ss", str(start), "-to", str(end), "-i", str(job.path),
+                    "-vn", "-ac", "1", "-ar", "16000", "-f", "wav", str(wav),
+                ], timeout=900)
+                if extract.returncode or not wav.is_file() or wav.stat().st_size == 0:
+                    raise RuntimeError(
+                        f"FFmpeg failed (exit {extract.returncode}): "
+                        f"{_short_error(extract.stderr)}"
+                    )
+
+                data = _transcribe_chunk(wav, out_base, language, model)
+
+                transcription = data.get("transcription")
+                if not isinstance(transcription, list):
+                    raise RuntimeError("whisper-cli produced no segments.")
+                for seg in transcription:
+                    offsets = seg.get("offsets") or {}
+                    text = (seg.get("text") or "").strip()
+                    if not text:
+                        continue
+                    from_ms = number(offsets.get("from")) or 0
+                    to_ms = number(offsets.get("to")) or from_ms
+                    segments.append({
+                        "start": round(start + from_ms / 1000.0, 3),
+                        "end": round(start + to_ms / 1000.0, 3),
+                        "text": text,
+                    })
+                job.segments = segments
+                job.completed_chunks = idx + 1
+                job.processed_duration = min((idx + 1) * CHUNK_SECONDS, duration)
+
+                # Save progress after every completed chunk (UTF-8).
+                payload = {
+                    "source": str(job.path),
+                    "fingerprint": fingerprint,
+                    "duration": duration,
+                    "language": language,
+                    "model": model.name,
+                    "backend": BACKEND,
+                    "threads": THREADS,
+                    "completed_chunks": idx + 1,
+                    "total_chunks": total,
+                    "created_at": _now_iso(),
+                    "segments": segments,
+                }
+                with open(file, "w", encoding="utf-8") as fh:
+                    json.dump(payload, fh, ensure_ascii=False, indent=2)
+            finally:
+                for tmp in (wav, json_path):
+                    try:
+                        if tmp.is_file():
+                            tmp.unlink()
+                    except OSError:
+                        pass
+                if job.cancel.is_set():
+                    job.cancelled = True
+                    return
+    except Exception as exc:  # noqa: BLE001 - surface any tool failure to the UI
+        job.failed = True
+        job.error = str(exc) or exc.__class__.__name__
+    finally:
+        job.running = False
+
+
+def _analysis_files_for(path: Path) -> list:
+    """Return transcript cache files that belong to this exact source."""
+    digest = _fingerprint(path)[:12]
+    prefix = f"transcript-{digest}-"
+    if not ANALYSIS_DIR.is_dir():
+        return []
+    try:
+        return sorted(
+            (p for p in ANALYSIS_DIR.iterdir()
+             if p.is_file() and p.name.startswith(prefix) and p.suffix == ".json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        return []
+
+
+def _get_job(path: Path) -> TranscribeJob:
+    """Return the live job for a path, else the most recent finished job, else a report."""
+    global _active_job, _last_job
+    with _transcribe_lock:
+        if _active_job is not None and _active_job.path == path:
+            return _active_job
+        if _last_job is not None and _last_job.path == path:
+            if _last_job.failed or _last_job.cancelled or _last_job.completed_chunks >= _last_job.total_chunks:
+                return _last_job
+    fingerprint = _fingerprint(path)
+    job = TranscribeJob(path)
+    for file in _analysis_files_for(path):
+        saved = _load_saved(file)
+        if saved and saved.get("fingerprint") == fingerprint:
+            completed = int(saved.get("completed_chunks") or 0)
+            total = int(math.ceil(float(saved.get("duration") or 0) / CHUNK_SECONDS))
+            job.duration = float(saved.get("duration") or 0)
+            job.completed_chunks = completed
+            job.total_chunks = max(total, 0)
+            job.language = saved.get("language") or "auto"
+            job.model = saved.get("model") or WHISPER_DEFAULT_MODEL.name
+            job.segments = list(saved.get("segments") or [])
+            job.processed_duration = min(completed * CHUNK_SECONDS, job.duration)
+            break
+    return job
+
+
+def _job_state(job: TranscribeJob, path: Path):
+    with job._lock:
+        live = job.running
+        cancelled = job.cancelled
+        failed = job.failed
+        error = job.error
+    elapsed = None
+    if job.started_at:
+        elapsed = round(time.monotonic() - job.started_at, 1)
+    complete = (not live) and not cancelled and not failed and job.completed_chunks >= job.total_chunks and job.total_chunks > 0
+    current = min(job.completed_chunks + 1, job.total_chunks) if (live and job.total_chunks) else job.completed_chunks
+    percent = (job.processed_duration / job.duration * 100.0) if job.duration else (100.0 if complete else 0.0)
+    return {
+        "source_path": str(path),
+        "running": live,
+        "cancelled": cancelled,
+        "failed": failed,
+        "error": error,
+        "duration": job.duration,
+        "total_chunks": job.total_chunks,
+        "completed_chunks": job.completed_chunks,
+        "current_chunk": current,
+        "processed_duration": job.processed_duration,
+        "percent": round(min(max(percent, 0.0), 100.0), 1),
+        "elapsed": elapsed,
+        "language": job.language,
+        "model": job.model,
+        "backend": BACKEND,
+        "threads": THREADS,
+        "has_transcript": complete,
+        "can_resume": (not live) and not failed and job.completed_chunks > 0 and job.total_chunks > 0 and job.completed_chunks < job.total_chunks,
+        "segments": list(job.segments),
+    }
+
+
+@app.get("/api/local/models")
+def local_models():
+    names = []
+    if WHISPER_MODELS.is_dir():
+        names = sorted(p.name for p in WHISPER_MODELS.iterdir()
+                     if p.suffix.lower() == ".bin" and p.is_file())
+    if not names:
+        names = [WHISPER_DEFAULT_MODEL.name]
+    return {"models": names, "backend": BACKEND, "threads": THREADS,
+            "default": WHISPER_DEFAULT_MODEL.name}
+
+
+@app.get("/api/local/transcribe/status")
+def transcribe_status(path: str):
+    try:
+        p = Path(path).resolve()
+    except (OSError, ValueError):
+        raise HTTPException(422, "Invalid path.")
+    return _job_state(_get_job(p), p)
+
+
+class TranscribeInput(BaseModel):
+    path: str = Field(min_length=1, max_length=32767)
+    language: str = "auto"
+    model: str = ""
+    retranscribe: bool = False
+
+
+@app.post("/api/local/transcribe")
+def start_transcribe(body: TranscribeInput):
+    global _active_job
+    try:
+        path = Path(body.path).resolve()
+        with selection_lock:
+            allowed = str(path) in selected_paths
+        if not allowed:
+            raise HTTPException(403, "Select this file using Select Local Video first.")
+        if path.suffix.lower() not in EXTENSIONS or not path.is_file():
+            raise HTTPException(422, "Select an existing MP4, MKV, MOV, WebM, or AVI video.")
+    except OSError:
+        raise HTTPException(422, "The selected path cannot be read.")
+
+    language = LANG_CODES.get(body.language, "auto")
+    model = WHISPER_DEFAULT_MODEL
+    if body.model:
+        candidate = (WHISPER_MODELS / body.model).resolve()
+        if not candidate.is_file() or candidate.parent != WHISPER_MODELS:
+            raise HTTPException(422, "That Whisper model is not available locally.")
+        model = candidate
+
+    with _transcribe_lock:
+        if _active_job is not None and _active_job.running:
+            raise HTTPException(409, "A transcription is already running.")
+
+    job = TranscribeJob(path)
+
+    def _run():
+        global _active_job, _last_job
+        try:
+            job.started_at = time.monotonic()
+            job.running = True
+            _run_worker(job, language, model, body.retranscribe)
+        finally:
+            with _transcribe_lock:
+                _active_job = None
+                # Keep the finished job available so the UI can read its final
+                # state (success, failure, or cancel) after the worker ends.
+                _last_job = job
+
+    with _transcribe_lock:
+        _active_job = job
+    threading.Thread(target=_run, daemon=True).start()
+    return {"started": True, "path": str(path)}
+
+
+@app.post("/api/local/transcribe/cancel")
+def cancel_transcribe(body: TranscribeInput):
+    try:
+        path = Path(body.path).resolve()
+    except (OSError, ValueError):
+        raise HTTPException(422, "Invalid path.")
+    with _transcribe_lock:
+        job = _active_job if _active_job is not None and _active_job.path == path and _active_job.running else None
+    if job:
+        job.cancel.set()
+        return {"cancelling": True}
+    return {"cancelling": False}
+
+
+app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 
 
 @app.middleware("http")
@@ -250,6 +663,3 @@ def inspect_url(body: URLInput):
         "format_info": data.get("format") or best.get("format") or data.get("ext"),
         "size_bytes": None, "status": "Ready",
     }
-
-
-app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")

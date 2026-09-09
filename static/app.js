@@ -15,11 +15,34 @@ const ui = {
   activity: document.getElementById("activity-status"),
   indicator: document.getElementById("activity-indicator"),
   summary: document.getElementById("system-summary"),
+  transcribeSection: document.getElementById("transcribe-section"),
+  language: document.getElementById("language-select"),
+  model: document.getElementById("model-select"),
+  transcribeBtn: document.getElementById("transcribe-btn"),
+  resumeBtn: document.getElementById("resume-btn"),
+  retranscribeBtn: document.getElementById("retranscribe-btn"),
+  cancelBtn: document.getElementById("cancel-btn"),
+  progress: document.getElementById("transcribe-progress"),
+  transcribeStatus: document.getElementById("transcribe-status"),
+  progressFill: document.getElementById("progress-fill"),
+  progressModel: document.getElementById("progress-model"),
+  progressBackend: document.getElementById("progress-backend"),
+  progressChunk: document.getElementById("progress-chunk"),
+  progressDuration: document.getElementById("progress-duration"),
+  progressPercent: document.getElementById("progress-percent"),
+  progressElapsed: document.getElementById("progress-elapsed"),
+  transcriptPanel: document.getElementById("transcript-panel"),
+  transcriptSearch: document.getElementById("transcript-search"),
+  transcriptCount: document.getElementById("transcript-count"),
+  transcriptList: document.getElementById("transcript-list"),
 };
 
 let token = null;
 let busy = false;
 let hasMedia = false;
+let localPath = null;
+let pollTimer = null;
+let transcription = [];
 const toolNames = ["python", "ffmpeg", "ffprobe", "yt_dlp"];
 
 function setActivity(message) {
@@ -289,7 +312,18 @@ async function inspectSource(kind) {
       media = await post("/api/url/inspect", { url });
     }
     renderMedia(media);
-    setActivity(kind === "local" ? "Inspection complete. The original file is unchanged." : "Inspection complete. URL metadata only; no full video downloaded.");
+    if (media.kind === "local") {
+      localPath = media.path;
+      await loadModels();
+      ui.transcribeSection.hidden = false;
+      await refreshTranscribe();
+      setActivity("Inspection complete. The original file is unchanged.");
+    } else {
+      localPath = null;
+      ui.transcribeSection.hidden = true;
+      setActivity("Inspection complete. URL metadata only; no full video downloaded.");
+    }
+    return media;
   } catch (error) {
     showError(error);
     setActivity(hasMedia ? "Inspection failed. Previous media details are still shown." : "Inspection failed. Check the message above and try again.");
@@ -298,6 +332,170 @@ async function inspectSource(kind) {
   }
 }
 
+async function loadModels() {
+  const data = await request("/api/local/models");
+  const models = Array.isArray(data?.models) ? data.models : [];
+  ui.model.innerHTML = "";
+  if (!models.length) {
+    const option = element("option", "", "base");
+    option.value = "";
+    ui.model.append(option);
+    return;
+  }
+  for (const name of models) {
+    const option = element("option", "", name.replace(/^ggml-|\.bin$/g, "") || name);
+    option.value = name;
+    if (name === data?.default) option.selected = true;
+    ui.model.append(option);
+  }
+}
+
+function setTranscribeRunning(running) {
+  ui.transcribeBtn.disabled = running;
+  ui.resumeBtn.disabled = running;
+  ui.retranscribeBtn.disabled = running;
+  ui.cancelBtn.hidden = !running;
+  ui.language.disabled = running;
+  ui.model.disabled = running;
+}
+
+function formatStat(d) {
+  if (d == null || !isFinite(d) || d < 0) return "0:00:00";
+  const s = Math.floor(d);
+  return [Math.floor(s / 3600), Math.floor(s / 60) % 60, s % 60]
+    .map((n) => String(n).padStart(2, "0")).join(":");
+}
+
+function renderTranscript(segments) {
+  transcription = Array.isArray(segments) ? segments : [];
+  applyTranscriptFilter();
+}
+
+function applyTranscriptFilter() {
+  const query = ui.transcriptSearch.value.trim().toLowerCase();
+  const list = transcription.filter((seg) => !query || (seg.text || "").toLowerCase().includes(query));
+  ui.transcriptList.innerHTML = "";
+  for (const seg of list) {
+    const item = element("li", "transcript-item");
+    const time = element("header", "transcript-time", formatStat(seg.start) + " → " + formatStat(seg.end));
+    item.append(time, element("p", "transcript-text", seg.text));
+    ui.transcriptList.append(item);
+  }
+  ui.transcriptCount.textContent = list.length
+    ? list.length + " segment" + (list.length === 1 ? "" : "s") + (query ? " matching" : "")
+    : (query ? "No matches" : "No segments");
+}
+
+async function refreshTranscribe() {
+  if (!localPath) return;
+  let state;
+  try {
+    state = await request("/api/local/transcribe/status?path=" + encodeURIComponent(localPath));
+  } catch (error) {
+    showError(error);
+    stopPolling();
+    return;
+  }
+  const running = Boolean(state.running);
+  const total = Number(state.total_chunks) || 0;
+  const solved = Math.min(Number(state.completed_chunks) || 0, total || 0);
+  const complete = Boolean(state.has_transcript);
+  const canResume = !running && !complete && solved > 0 && total > 0 && solved < total;
+
+  setTranscribeRunning(running);
+
+  if (running || complete || canResume || state.failed) {
+    ui.progress.hidden = false;
+    ui.progressModel.textContent = state.model || "base";
+    ui.progressBackend.textContent = state.backend || "CPU";
+    ui.progressChunk.textContent = (running ? (Math.min(Number(state.current_chunk) || 1, total || 1)) : (solved || 0)) + " / " + (total || 0);
+    ui.progressDuration.textContent = formatStat(Number(state.processed_duration) || 0) + " / " + formatStat(Number(state.duration) || 0);
+    const pct = total ? Math.round((solved / total) * 100) : 0;
+    ui.progressFill.style.width = pct + "%";
+    ui.progressPercent.textContent = pct + "%";
+    ui.progressElapsed.textContent = state.elapsed != null ? state.elapsed + "s" : "-";
+
+    if (running) {
+      ui.transcribeStatus.textContent = state.cancelled
+        ? "Cancelling, letting the current chunk finish …"
+        : "Transcribing chunk " + (Math.min(Number(state.current_chunk) || 1, total || 1)) + " / " + (total || 1) + " on CPU. The UI stays responsive.";
+      startPolling();
+    } else if (complete) {
+      stopPolling();
+      ui.transcribeStatus.textContent = "Transcription complete and saved.";
+      renderTranscript(state.segments);
+      ui.transcriptPanel.hidden = false;
+    } else if (canResume) {
+      stopPolling();
+      ui.transcribeBtn.hidden = false;
+      ui.resumeBtn.hidden = false;
+      ui.retranscribeBtn.hidden = false;
+      ui.transcribeStatus.textContent = "Stopped at chunk " + solved + " / " + total + ". RESUME continues from here.";
+    } else if (state.failed) {
+      stopPolling();
+      ui.retranscribeBtn.hidden = false;
+      ui.transcribeStatus.textContent = state.error || "Transcription failed.";
+    }
+  }
+}
+
+function pollTranscribe() {
+  if (localPath) void refreshTranscribe();
+}
+
+function startPolling() {
+  if (pollTimer === null) {
+    pollTimer = setInterval(pollTranscribe, 1200);
+  }
+}
+
+function stopPolling() {
+  if (pollTimer !== null) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+async function startTranscribe(retranscribe) {
+  if (!localPath) return;
+  clearError();
+  ui.resumeBtn.hidden = true;
+  ui.retranscribeBtn.hidden = true;
+  ui.transcribeBtn.hidden = true;
+  ui.cancelBtn.hidden = true;
+  ui.progress.hidden = false;
+  ui.transcriptPanel.hidden = true;
+  ui.transcribeStatus.textContent = retranscribe ? "Re-transcribing from the start …" : "Starting transcription …";
+  ui.transcribeBtn.disabled = true;
+  try {
+    await post("/api/local/transcribe", {
+      path: localPath,
+      language: ui.language.value,
+      model: ui.model.value || "",
+      retranscribe: Boolean(retranscribe),
+    });
+    await refreshTranscribe();
+  } catch (error) {
+    showError(error);
+    await refreshTranscribe();
+  }
+}
+
+async function cancelTranscribe() {
+  if (!localPath) return;
+  try {
+    await post("/api/local/transcribe/cancel", { path: localPath });
+    ui.transcribeStatus.textContent = "Cancelling after the current chunk …";
+  } catch (error) {
+    showError(error);
+  }
+}
+
+ui.transcribeBtn.addEventListener("click", () => { void startTranscribe(false); });
+ui.resumeBtn.addEventListener("click", () => { void startTranscribe(false); });
+ui.retranscribeBtn.addEventListener("click", () => { void startTranscribe(true); });
+ui.cancelBtn.addEventListener("click", () => { void cancelTranscribe(); });
+ui.transcriptSearch.addEventListener("input", applyTranscriptFilter);
 ui.local.addEventListener("click", () => { void inspectSource("local"); });
 ui.form.addEventListener("submit", (event) => { event.preventDefault(); void inspectSource("url"); });
 ui.refresh.addEventListener("click", () => { void refreshConnection(); });

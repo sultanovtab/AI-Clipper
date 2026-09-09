@@ -16,7 +16,7 @@
         <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M10 5H5v22h5M22 5h5v22h-5M13 11l8 5-8 5z"/></svg></span>
         <span>AI Clipper<span class="brand-caption">LOCAL MEDIA WORKSPACE</span></span>
       </a>
-      <div class="header-meta"><span class="phase-tag">PHASE 01</span><span class="header-divider"></span><span>Media inspection</span></div>
+      <div class="header-meta"><span class="phase-tag">PHASE 02</span><span class="header-divider"></span><span>Media inspection + local transcription</span></div>
     </header>
 
     <main>
@@ -67,6 +67,53 @@
         </section>
       </div>
 
+      <section id="transcribe-section" class="transcribe-section" hidden>
+        <div class="section-heading"><h2 id="transcribe-heading">Transcribe this video</h2><span class="section-index">03 / LOCAL SPEECH</span></div>
+        <article class="transcribe-card">
+          <div class="transcribe-controls">
+            <div class="option-group">
+              <label for="language-select">Language</label>
+              <select id="language-select">
+                <option value="auto" selected>Auto detect</option>
+                <option value="ru">Russian</option>
+                <option value="en">English</option>
+                <option value="de">German</option>
+              </select>
+            </div>
+            <div class="option-group">
+              <label for="model-select">Model</label>
+              <select id="model-select"><option value="">base</option></select>
+            </div>
+            <div class="transcribe-actions">
+              <button id="transcribe-btn" class="button button-primary" type="button" data-action disabled><span>TRANSCRIBE</span></button>
+              <button id="resume-btn" class="button button-secondary" type="button" data-action disabled hidden><span>RESUME</span></button>
+              <button id="retranscribe-btn" class="button button-ghost" type="button" data-action disabled hidden><span>RE-TRANSCRIBE</span></button>
+              <button id="cancel-btn" class="button button-danger" type="button" data-action disabled hidden><span>CANCEL</span></button>
+            </div>
+          </div>
+          <div id="transcribe-progress" class="transcribe-progress" hidden>
+            <p id="transcribe-status" class="transcribe-status" role="status" aria-live="polite"></p>
+            <div class="progress-track"><div id="progress-fill" class="progress-fill"></div></div>
+            <dl class="transcribe-stats">
+              <div><dt>Model</dt><dd id="progress-model">base</dd></div>
+              <div><dt>Backend</dt><dd id="progress-backend">CPU</dd></div>
+              <div><dt>Chunk</dt><dd id="progress-chunk">-</dd></div>
+              <div><dt>Duration</dt><dd id="progress-duration">-</dd></div>
+              <div><dt>Progress</dt><dd id="progress-percent">-</dd></div>
+              <div><dt>Elapsed</dt><dd id="progress-elapsed">-</dd></div>
+            </dl>
+          </div>
+          <div id="transcript-panel" class="transcript-panel" hidden>
+            <div class="transcript-toolbar">
+              <span class="transcript-title">TRANSCRIPT</span>
+              <label class="search-box"><input id="transcript-search" type="search" placeholder="Search transcript..." autocomplete="off"></label>
+            </div>
+            <div id="transcript-count" class="transcript-count"></div>
+            <ol id="transcript-list" class="transcript-list"></ol>
+          </div>
+        </article>
+      </section>
+
       <section class="system-section" aria-labelledby="system-heading">
         <div class="section-heading"><div class="system-title"><h2 id="system-heading">System status</h2><span id="system-summary" class="system-summary">Checking local tools</span></div><button id="refresh-status" class="text-button" type="button" data-action disabled>Refresh status <span aria-hidden="true">&circlearrowright;</span></button></div>
         <div class="tool-grid">
@@ -77,7 +124,7 @@
         </div>
       </section>
     </main>
-    <footer><span>LOCAL FIRST. SOURCE INTACT.</span><p>Phase 1 <span aria-hidden="true">/</span> Media inspection only</p></footer>
+    <footer><span>LOCAL FIRST. SOURCE INTACT.</span><p>Phase 2 <span aria-hidden="true">/</span> Media inspection + local transcription</p></footer>
     <noscript><p class="error-message">JavaScript is required to connect to the local inspection service. No files are uploaded through this page.</p></noscript>
   </div>
 </body>
